@@ -19,24 +19,24 @@ jobs:
             label: linux-x86_64
             target: x86_64
             manylinux: "2_28"
-          # - os: ubuntu-latest
-          #   label: linux-aarch64
-          #   target: aarch64
-          #   manylinux: "2_28"
+          - os: ubuntu-latest
+            label: linux-aarch64
+            target: aarch64
+            manylinux: "2_28"
 
-          # - os: macos-13
-          #   label: macos-intel
-          #   target: x86_64
-          #   manylinux: "off"
-          # - os: macos-14
-          #   label: macos-arm64
-          #   target: aarch64
-          #   manylinux: "off"
+          - os: macos-13
+            label: macos-intel
+            target: x86_64
+            manylinux: "off"
+          - os: macos-14
+            label: macos-arm64
+            target: aarch64
+            manylinux: "off"
 
-          # - os: windows-latest
-          #   label: win-x86_64
-          #   target: x86_64
-          #   manylinux: "off"
+          - os: windows-latest
+            label: win-x86_64
+            target: x86_64
+            manylinux: "off"
 
     steps:
       - uses: actions/checkout@v4
