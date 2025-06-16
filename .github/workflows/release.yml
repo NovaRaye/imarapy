@@ -41,12 +41,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Bump Cargo version to tag
+      - name: Bump Cargo version to tag (Unix)
+        if: runner.os != 'Windows'
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
           cargo install --locked cargo-edit
           cargo set-version --workspace "$VERSION"
-    
+
+      - name: Bump Cargo version to tag (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          $VERSION = $env:GITHUB_REF -replace 'refs/tags/v', ''
+          cargo install --locked cargo-edit
+          cargo set-version --workspace "$VERSION"
 
       - name: Build wheels
         uses: PyO3/maturin-action@v1
