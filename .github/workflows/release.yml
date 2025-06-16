@@ -3,9 +3,8 @@ name: Build & Publish wheels
 on:
   push:
     tags:
-      - 'v*'                  # 任何 v0.1.0、v1.2.3… 都触发
+      - 'v*'
 
-# 若用 PyPI Trusted Publishing，还需要 id-token: write
 permissions:
   contents: write
 
@@ -16,31 +15,29 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # ---------- Linux ----------
-          - os: ubuntu-latest      # x86_64
+          - os: ubuntu-latest
             label: linux-x86_64
             target: x86_64
             manylinux: "2_28"
-          # - os: ubuntu-latest      # cross-compile aarch64
-          #   label: linux-aarch64
-          #   target: aarch64
-          #   manylinux: "2_28"
+          - os: ubuntu-latest
+            label: linux-aarch64
+            target: aarch64
+            manylinux: "2_28"
 
-          # # ---------- macOS ----------
-          # - os: macos-13           # Intel
-          #   label: macos-intel
-          #   target: x86_64
-          #   manylinux: "off"
-          # - os: macos-14           # Apple Silicon
-          #   label: macos-arm64
-          #   target: aarch64
-          #   manylinux: "off"
+    
+          - os: macos-13
+            label: macos-intel
+            target: x86_64
+            manylinux: "off"
+          - os: macos-14   
+            label: macos-arm64
+            target: aarch64
+            manylinux: "off"
 
-          # # ---------- Windows -------
-          # - os: windows-latest
-          #   label: win-x86_64
-          #   target: x86_64
-          #   manylinux: "off"
+          - os: windows-latest
+            label: win-x86_64
+            target: x86_64
+            manylinux: "off"
 
     steps:
       - uses: actions/checkout@v4
@@ -50,7 +47,7 @@ jobs:
         with:
           command: build
           target: ${{ matrix.target }}
-          manylinux: ${{ matrix.manylinux }}  # ← 这里解决 glibc 版本过新问题
+          manylinux: ${{ matrix.manylinux }}
           args: --release --interpreter 3.10 3.11 3.12
 
       - name: Upload wheels
@@ -66,13 +63,11 @@ jobs:
       - name: Download all wheel artifacts to one dir
         uses: actions/download-artifact@v4
         with:
-          path: dist                    # 全部展开到 dist/
-          pattern: "*-wheels"           # 只抓前面的 wheels 工件
-          merge-multiple: true          # 关键！扁平化目录结构
+          path: dist             
+          pattern: "*-wheels"      
+          merge-multiple: true    
 
       - uses: astral-sh/setup-uv@v4
 
       - name: Upload to PyPI
         run: uv publish dist/* --token ${{ secrets.PYPI_API_TOKEN }}
-        # 如果改用 Trusted Publishing，可写：
-        # run: uv publish dist/*
