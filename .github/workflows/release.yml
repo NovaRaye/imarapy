@@ -19,31 +19,34 @@ jobs:
             label: linux-x86_64
             target: x86_64
             manylinux: "2_28"
-          - os: ubuntu-latest
-            label: linux-aarch64
-            target: aarch64
-            manylinux: "2_28"
+          # - os: ubuntu-latest
+          #   label: linux-aarch64
+          #   target: aarch64
+          #   manylinux: "2_28"
 
-          - os: macos-13
-            label: macos-intel
-            target: x86_64
-            manylinux: "off"
-          - os: macos-14
-            label: macos-arm64
-            target: aarch64
-            manylinux: "off"
+          # - os: macos-13
+          #   label: macos-intel
+          #   target: x86_64
+          #   manylinux: "off"
+          # - os: macos-14
+          #   label: macos-arm64
+          #   target: aarch64
+          #   manylinux: "off"
 
-          - os: windows-latest
-            label: win-x86_64
-            target: x86_64
-            manylinux: "off"
+          # - os: windows-latest
+          #   label: win-x86_64
+          #   target: x86_64
+          #   manylinux: "off"
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Extract version from tag
-        id: get_version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
+      - name: Bump Cargo version to tag
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          cargo install --locked cargo-edit
+          cargo set-version --workspace "$VERSION"
+    
 
       - name: Build wheels
         uses: PyO3/maturin-action@v1
@@ -51,13 +54,14 @@ jobs:
           command: build
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
-          args: --release --interpreter 3.10 3.11 3.12 --version ${{ env.VERSION }}
+          args: --release --interpreter 3.10 3.11 3.12
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.label }}-wheels
           path: target/wheels/*.whl
+          retention-days: 7
 
   publish:
     needs: build
