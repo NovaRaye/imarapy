@@ -21,26 +21,26 @@ jobs:
             label: linux-x86_64
             target: x86_64
             manylinux: "2_28"
-          - os: ubuntu-latest      # cross-compile aarch64
-            label: linux-aarch64
-            target: aarch64
-            manylinux: "2_28"
+          # - os: ubuntu-latest      # cross-compile aarch64
+          #   label: linux-aarch64
+          #   target: aarch64
+          #   manylinux: "2_28"
 
-          # ---------- macOS ----------
-          - os: macos-13           # Intel
-            label: macos-intel
-            target: x86_64
-            manylinux: "off"
-          - os: macos-14           # Apple Silicon
-            label: macos-arm64
-            target: aarch64
-            manylinux: "off"
+          # # ---------- macOS ----------
+          # - os: macos-13           # Intel
+          #   label: macos-intel
+          #   target: x86_64
+          #   manylinux: "off"
+          # - os: macos-14           # Apple Silicon
+          #   label: macos-arm64
+          #   target: aarch64
+          #   manylinux: "off"
 
-          # ---------- Windows -------
-          - os: windows-latest
-            label: win-x86_64
-            target: x86_64
-            manylinux: "off"
+          # # ---------- Windows -------
+          # - os: windows-latest
+          #   label: win-x86_64
+          #   target: x86_64
+          #   manylinux: "off"
 
     steps:
       - uses: actions/checkout@v4
@@ -60,14 +60,15 @@ jobs:
           path: target/wheels/*.whl
 
   publish:
-    name: Publish to PyPI
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Download all wheel artifacts to one dir
+        uses: actions/download-artifact@v4
         with:
-          path: dist
-          pattern: "*-wheels"
+          path: dist                    # 全部展开到 dist/
+          pattern: "*-wheels"           # 只抓前面的 wheels 工件
+          merge-multiple: true          # 关键！扁平化目录结构
 
       - uses: astral-sh/setup-uv@v4
 
