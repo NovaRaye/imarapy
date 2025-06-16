@@ -1,8 +1,8 @@
 # imarapy
 
-[imara-diff](https://github.com/rsms/imara-diff) Rust 库的 Python 绑定，提供高效且健壮的文本差异比较功能。
-
 [English Documentation](README.md)
+
+[imara-diff](https://github.com/rsms/imara-diff) Rust 库的 Python 绑定，提供高效且健壮的文本差异比较功能。
 
 ## 安装
 
