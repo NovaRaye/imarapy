@@ -10,45 +10,46 @@ permissions:
 
 jobs:
   build:
-    name: build-${{ matrix.label }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - label: linux-x86_64
-            os: ubuntu-latest
-          - label: linux-aarch64
-            os: ubuntu-latest-arm64
+          # Linux
+          - os: ubuntu-latest   # x86_64
+            label: linux-x86_64
+            target: x86_64
+          - os: ubuntu-latest   # cross 编 aarch64
+            label: linux-aarch64
+            target: aarch64
 
-          - label: macos-intel
-            os: macos-13
-          - label: macos-arm64
-            os: macos-14
+          # macOS
+          - os: macos-13        # Intel
+            label: macos-intel
+            target: x86_64
+          - os: macos-14        # Apple Silicon
+            label: macos-arm64
+            target: aarch64
 
-          - label: win-x86_64
-            os: windows-latest
+          # Windows
+          - os: windows-latest
+            label: win-x86_64
+            target: x86_64
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential libssl-dev
 
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           command: build
-          args: --release --interpreter 3.10 3.11 3.12
+          target: ${{ matrix.target }}
+          args: --release --compatibility manylinux_2_28 --interpreter 3.10 3.11 3.12
 
-      - name: Upload wheels as artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.label }}-wheels
-          path: target/wheels/*
+          path: target/wheels/*.whl
 
   publish:
     name: Publish to PyPI
