@@ -1,0 +1,13 @@
+[package]
+name = "imarapy"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+
+[dependencies]
+imara-diff = "0.2"
+pyo3 = { version = "0.25.1", features = ["extension-module"] }
+unicode-segmentation = "1.12.0"
