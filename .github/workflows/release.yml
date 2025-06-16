@@ -3,7 +3,7 @@ name: Build & Publish wheels
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 permissions:
   contents: write
@@ -24,12 +24,11 @@ jobs:
             target: aarch64
             manylinux: "2_28"
 
-    
           - os: macos-13
             label: macos-intel
             target: x86_64
             manylinux: "off"
-          - os: macos-14   
+          - os: macos-14
             label: macos-arm64
             target: aarch64
             manylinux: "off"
@@ -42,13 +41,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Extract version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
+
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           command: build
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
-          args: --release --interpreter 3.10 3.11 3.12
+          args: --release --interpreter 3.10 3.11 3.12 --version ${{ env.VERSION }}
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -63,9 +66,9 @@ jobs:
       - name: Download all wheel artifacts to one dir
         uses: actions/download-artifact@v4
         with:
-          path: dist             
-          pattern: "*-wheels"      
-          merge-multiple: true    
+          path: dist
+          pattern: "*-wheels"
+          merge-multiple: true
 
       - uses: astral-sh/setup-uv@v4
 
