@@ -1,6 +1,5 @@
-use pyo3::conversion::IntoPyObjectExt;
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict, PyIterator, PyList};
+use pyo3::types::{PyAny, PyIterator, PyList};
 
 use imara_diff::{Algorithm, Diff, InternedInput, TokenSource};
 
@@ -133,6 +132,44 @@ fn diff<'py>(
     Ok(out)
 }
 
+#[pyclass]
+struct Chunk {
+    #[pyo3(get)]
+    position: i64,
+    #[pyo3(get)]
+    rows: Py<PyList>,
+}
+
+#[pymethods]
+impl Chunk {
+    #[new]
+    fn new(position: i64, rows: Py<PyList>) -> Self {
+        Self { position, rows }
+    }
+}
+
+#[pyclass]
+struct Delta {
+    #[pyo3(get, name = "type")]
+    type_: String,
+    #[pyo3(get)]
+    source: Py<Chunk>,
+    #[pyo3(get)]
+    target: Py<Chunk>,
+}
+
+#[pymethods]
+impl Delta {
+    #[new]
+    fn new(type_: String, source: Py<Chunk>, target: Py<Chunk>) -> Self {
+        Self {
+            type_,
+            source,
+            target,
+        }
+    }
+}
+
 fn build_record<'py>(
     py: Python<'py>,
     kind: &str,
@@ -141,26 +178,40 @@ fn build_record<'py>(
     tgt_pos: i64,
     tgt_rows: Vec<Py<PyAny>>,
 ) -> PyResult<PyObject> {
-    let source = PyDict::new(py);
     let src_list = PyList::new(py, &src_rows)?;
-    source.set_item("position", src_pos)?;
-    source.set_item("rows", src_list)?;
-
-    let target = PyDict::new(py);
     let tgt_list = PyList::new(py, &tgt_rows)?;
-    target.set_item("position", tgt_pos)?;
-    target.set_item("rows", tgt_list)?;
 
-    let rec = PyDict::new(py);
-    rec.set_item("type", kind)?;
-    rec.set_item("source", source)?;
-    rec.set_item("target", target)?;
+    // Create source and target objects
+    let source = Py::new(
+        py,
+        Chunk {
+            position: src_pos,
+            rows: Py::from(src_list),
+        },
+    )?;
 
-    Ok(rec.into_py_any(py)?)
+    let target = Py::new(
+        py,
+        Chunk {
+            position: tgt_pos,
+            rows: Py::from(tgt_list),
+        },
+    )?;
+
+    // Create the record with nested objects
+    let record = Delta {
+        type_: kind.to_string(),
+        source,
+        target,
+    };
+
+    Ok(Py::new(py, record)?.into())
 }
 
 #[pymodule]
 fn imarapy<'py>(_py: Python<'py>, m: &Bound<'py, PyModule>) -> PyResult<()> {
+    m.add_class::<Chunk>()?;
+    m.add_class::<Delta>()?;
     m.add_function(wrap_pyfunction!(diff, m)?)?;
     Ok(())
 }

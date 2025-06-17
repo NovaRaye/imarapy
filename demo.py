@@ -3,12 +3,13 @@ import imarapy
 def print_git_style_diff(differences):
     
     for diff in differences:
-        src_pos = diff["source"]["position"]
-        src_rows = diff["source"]["rows"]
-        tgt_pos = diff["target"]["position"]
-        tgt_rows = diff["target"]["rows"]
-        diff_type = diff["type"]
-        
+        print(diff)
+        src_pos = diff.source.position
+        src_rows = diff.source.rows
+        tgt_pos = diff.target.position
+        tgt_rows = diff.target.rows
+        diff_type = diff.type
+
         # Create a git-style hunk header
         src_count = len(src_rows) if src_rows else 0
         tgt_count = len(tgt_rows) if tgt_rows else 0
