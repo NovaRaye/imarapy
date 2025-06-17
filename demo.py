@@ -1,5 +1,6 @@
 import imarapy
 
+
 def print_git_style_diff(differences):
     
     for diff in differences:
@@ -10,21 +11,20 @@ def print_git_style_diff(differences):
         tgt_rows = diff.target.rows
         diff_type = diff.type
 
-        # Create a git-style hunk header
         src_count = len(src_rows) if src_rows else 0
         tgt_count = len(tgt_rows) if tgt_rows else 0
         
-        if diff_type == "Insert":
+        if diff_type == imarapy.INSERT:
             print(f"@@ -{src_pos},0 +{tgt_pos},{tgt_count} @@")
             for row in tgt_rows:
                 print(f"+ {row}")
                 
-        elif diff_type == "Delete":
+        elif diff_type == imarapy.DELETE:
             print(f"@@ -{src_pos},{src_count} +{tgt_pos},0 @@")
             for row in src_rows:
                 print(f"- {row}")
                 
-        elif diff_type == "Change":
+        elif diff_type == imarapy.CHANGE:
             print(f"@@ -{src_pos},{src_count} +{tgt_pos},{tgt_count} @@")
             for row in src_rows:
                 print(f"- {row}")

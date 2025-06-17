@@ -3,6 +3,10 @@ use pyo3::types::{PyAny, PyIterator, PyList};
 
 use imara_diff::{Algorithm, Diff, InternedInput, TokenSource};
 
+pub const DELETE: &str = "Delete";
+pub const INSERT: &str = "Insert";
+pub const CHANGE: &str = "Change";
+
 struct TokenVec<'a>(&'a [u32]);
 impl<'a> TokenSource for TokenVec<'a> {
     type Token = u32;
@@ -93,7 +97,7 @@ fn diff<'py>(
                 .collect();
             out.push(build_record(
                 py,
-                "Delete",
+                DELETE,
                 src_pos,
                 rows,
                 tgt_pos,
@@ -107,7 +111,7 @@ fn diff<'py>(
                 .collect();
             out.push(build_record(
                 py,
-                "Insert",
+                INSERT,
                 src_pos,
                 Vec::new(),
                 tgt_pos,
@@ -125,7 +129,7 @@ fn diff<'py>(
                 .map(|j| after_vec[j as usize].clone_ref(py))
                 .collect();
             out.push(build_record(
-                py, "Change", src_pos, src_rows, tgt_pos, tgt_rows,
+                py, CHANGE, src_pos, src_rows, tgt_pos, tgt_rows,
             )?);
         }
     }
@@ -213,5 +217,10 @@ fn imarapy<'py>(_py: Python<'py>, m: &Bound<'py, PyModule>) -> PyResult<()> {
     m.add_class::<Chunk>()?;
     m.add_class::<Delta>()?;
     m.add_function(wrap_pyfunction!(diff, m)?)?;
+
+    m.add("DELETE", DELETE)?;
+    m.add("INSERT", INSERT)?;
+    m.add("CHANGE", CHANGE)?;
+
     Ok(())
 }
