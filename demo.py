@@ -14,17 +14,17 @@ def print_git_style_diff(differences):
         src_count = len(src_rows) if src_rows else 0
         tgt_count = len(tgt_rows) if tgt_rows else 0
         
-        if diff_type == imarapy.INSERT:
+        if diff_type == imarapy.DELTA_TYPE_INSERT:
             print(f"@@ -{src_pos},0 +{tgt_pos},{tgt_count} @@")
             for row in tgt_rows:
                 print(f"+ {row}")
                 
-        elif diff_type == imarapy.DELETE:
+        elif diff_type == imarapy.DELTA_TYPE_DELETE:
             print(f"@@ -{src_pos},{src_count} +{tgt_pos},0 @@")
             for row in src_rows:
                 print(f"- {row}")
                 
-        elif diff_type == imarapy.CHANGE:
+        elif diff_type == imarapy.DELTA_TYPE_CHANGE:
             print(f"@@ -{src_pos},{src_count} +{tgt_pos},{tgt_count} @@")
             for row in src_rows:
                 print(f"- {row}")
