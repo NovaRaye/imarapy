@@ -21,7 +21,7 @@ impl<'a> TokenSource for TokenVec<'a> {
     }
 }
 
-fn collect_rows<'py>(_py: Python<'py>, seq: &Bound<'py, PyAny>) -> PyResult<Vec<Py<PyAny>>> {
+fn collect_lines<'py>(_py: Python<'py>, seq: &Bound<'py, PyAny>) -> PyResult<Vec<Py<PyAny>>> {
     let mut out = Vec::new();
     for item in PyIterator::from_object(seq)? {
         out.push(Py::from(item?));
@@ -31,11 +31,11 @@ fn collect_rows<'py>(_py: Python<'py>, seq: &Bound<'py, PyAny>) -> PyResult<Vec<
 
 fn tokenize_exact<'py>(
     py: Python<'py>,
-    rows: &[Py<PyAny>],
+    lines: &[Py<PyAny>],
     interner: &mut Vec<Py<PyAny>>,
 ) -> PyResult<Vec<u32>> {
-    let mut tokens = Vec::with_capacity(rows.len());
-    for row in rows {
+    let mut tokens = Vec::with_capacity(lines.len());
+    for row in lines {
         let id = interner
             .iter()
             .position(|rep| {
@@ -73,8 +73,8 @@ fn diff<'py>(
         }
     };
 
-    let before_vec = collect_rows(py, before)?;
-    let after_vec = collect_rows(py, after)?;
+    let before_vec = collect_lines(py, before)?;
+    let after_vec = collect_lines(py, after)?;
 
     let mut interner = Vec::new();
     let before_tok = tokenize_exact(py, &before_vec, &mut interner)?;
@@ -90,7 +90,7 @@ fn diff<'py>(
         let tgt_pos = h.after.start as i64 + 1;
 
         if h.is_pure_removal() {
-            let rows = h
+            let lines = h
                 .before
                 .clone()
                 .map(|i| before_vec[i as usize].clone_ref(py))
@@ -99,12 +99,12 @@ fn diff<'py>(
                 py,
                 DELTA_TYPE_DELETE,
                 src_pos,
-                rows,
+                lines,
                 tgt_pos,
                 Vec::new(),
             )?);
         } else if h.is_pure_insertion() {
-            let rows = h
+            let lines = h
                 .after
                 .clone()
                 .map(|j| after_vec[j as usize].clone_ref(py))
@@ -115,21 +115,26 @@ fn diff<'py>(
                 src_pos,
                 Vec::new(),
                 tgt_pos,
-                rows,
+                lines,
             )?);
         } else {
-            let src_rows = h
+            let src_lines = h
                 .before
                 .clone()
                 .map(|i| before_vec[i as usize].clone_ref(py))
                 .collect();
-            let tgt_rows = h
+            let tgt_lines = h
                 .after
                 .clone()
                 .map(|j| after_vec[j as usize].clone_ref(py))
                 .collect();
             out.push(build_record(
-                py, DELTA_TYPE_CHANGE, src_pos, src_rows, tgt_pos, tgt_rows,
+                py,
+                DELTA_TYPE_CHANGE,
+                src_pos,
+                src_lines,
+                tgt_pos,
+                tgt_lines,
             )?);
         }
     }
@@ -141,14 +146,14 @@ struct Chunk {
     #[pyo3(get)]
     position: i64,
     #[pyo3(get)]
-    rows: Py<PyList>,
+    lines: Py<PyList>,
 }
 
 #[pymethods]
 impl Chunk {
     #[new]
-    fn new(position: i64, rows: Py<PyList>) -> Self {
-        Self { position, rows }
+    fn new(position: i64, lines: Py<PyList>) -> Self {
+        Self { position, lines }
     }
 }
 
@@ -178,19 +183,19 @@ fn build_record<'py>(
     py: Python<'py>,
     kind: &str,
     src_pos: i64,
-    src_rows: Vec<Py<PyAny>>,
+    src_lines: Vec<Py<PyAny>>,
     tgt_pos: i64,
-    tgt_rows: Vec<Py<PyAny>>,
+    tgt_lines: Vec<Py<PyAny>>,
 ) -> PyResult<PyObject> {
-    let src_list = PyList::new(py, &src_rows)?;
-    let tgt_list = PyList::new(py, &tgt_rows)?;
+    let src_list = PyList::new(py, &src_lines)?;
+    let tgt_list = PyList::new(py, &tgt_lines)?;
 
     // Create source and target objects
     let source = Py::new(
         py,
         Chunk {
             position: src_pos,
-            rows: Py::from(src_list),
+            lines: Py::from(src_list),
         },
     )?;
 
@@ -198,7 +203,7 @@ fn build_record<'py>(
         py,
         Chunk {
             position: tgt_pos,
-            rows: Py::from(tgt_list),
+            lines: Py::from(tgt_list),
         },
     )?;
 

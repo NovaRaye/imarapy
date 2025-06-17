@@ -6,29 +6,29 @@ def print_git_style_diff(differences):
     for diff in differences:
         print(diff)
         src_pos = diff.source.position
-        src_rows = diff.source.rows
+        src_lines = diff.source.lines
         tgt_pos = diff.target.position
-        tgt_rows = diff.target.rows
+        tgt_lines = diff.target.lines
         diff_type = diff.type
 
-        src_count = len(src_rows) if src_rows else 0
-        tgt_count = len(tgt_rows) if tgt_rows else 0
+        src_count = len(src_lines) if src_lines else 0
+        tgt_count = len(tgt_lines) if tgt_lines else 0
         
         if diff_type == imarapy.DELTA_TYPE_INSERT:
             print(f"@@ -{src_pos},0 +{tgt_pos},{tgt_count} @@")
-            for row in tgt_rows:
+            for row in tgt_lines:
                 print(f"+ {row}")
                 
         elif diff_type == imarapy.DELTA_TYPE_DELETE:
             print(f"@@ -{src_pos},{src_count} +{tgt_pos},0 @@")
-            for row in src_rows:
+            for row in src_lines:
                 print(f"- {row}")
                 
         elif diff_type == imarapy.DELTA_TYPE_CHANGE:
             print(f"@@ -{src_pos},{src_count} +{tgt_pos},{tgt_count} @@")
-            for row in src_rows:
+            for row in src_lines:
                 print(f"- {row}")
-            for row in tgt_rows:
+            for row in tgt_lines:
                 print(f"+ {row}")
                 
         print()  # Empty line between hunks
