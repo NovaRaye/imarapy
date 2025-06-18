@@ -16,20 +16,20 @@ def print_git_style_diff(differences):
         
         if diff_type == imarapy.DELTA_TYPE_INSERT:
             print(f"@@ -{src_pos},0 +{tgt_pos},{tgt_count} @@")
-            for row in tgt_lines:
-                print(f"+ {row}")
+            for line in tgt_lines:
+                print(f"+ {line}")
                 
         elif diff_type == imarapy.DELTA_TYPE_DELETE:
             print(f"@@ -{src_pos},{src_count} +{tgt_pos},0 @@")
-            for row in src_lines:
-                print(f"- {row}")
+            for line in src_lines:
+                print(f"- {line}")
                 
         elif diff_type == imarapy.DELTA_TYPE_CHANGE:
             print(f"@@ -{src_pos},{src_count} +{tgt_pos},{tgt_count} @@")
-            for row in src_lines:
-                print(f"- {row}")
-            for row in tgt_lines:
-                print(f"+ {row}")
+            for line in src_lines:
+                print(f"- {line}")
+            for line in tgt_lines:
+                print(f"+ {line}")
                 
         print()  # Empty line between hunks
 

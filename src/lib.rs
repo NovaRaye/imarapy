@@ -35,18 +35,18 @@ fn tokenize_exact<'py>(
     interner: &mut Vec<Py<PyAny>>,
 ) -> PyResult<Vec<u32>> {
     let mut tokens = Vec::with_capacity(lines.len());
-    for row in lines {
+    for line in lines {
         let id = interner
             .iter()
             .position(|rep| {
-                row.bind(py)
+                line.bind(py)
                     .rich_compare(rep.bind(py), pyo3::basic::CompareOp::Eq)
                     .and_then(|b| b.is_truthy())
                     .unwrap_or(false)
             })
             .map(|idx| idx as u32)
             .unwrap_or_else(|| {
-                interner.push(row.clone_ref(py));
+                interner.push(line.clone_ref(py));
                 (interner.len() - 1) as u32
             });
         tokens.push(id);
@@ -86,8 +86,8 @@ fn diff<'py>(
 
     let mut out = Vec::<PyObject>::new();
     for h in diff.hunks() {
-        let src_pos = h.before.start as i64 + 1;
-        let tgt_pos = h.after.start as i64 + 1;
+        let src_pos = h.before.start as i64;
+        let tgt_pos = h.after.start as i64;
 
         if h.is_pure_removal() {
             let lines = h
@@ -207,7 +207,6 @@ fn build_record<'py>(
         },
     )?;
 
-    // Create the record with nested objects
     let record = Delta {
         type_: kind.to_string(),
         source,
