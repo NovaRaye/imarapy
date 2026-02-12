@@ -24,11 +24,7 @@ jobs:
             target: aarch64
             manylinux: "2_28"
 
-          - os: macos-13
-            label: macos-intel
-            target: x86_64
-            manylinux: "off"
-          - os: macos-14
+          - os: macos-latest
             label: macos-arm64
             target: aarch64
             manylinux: "off"
