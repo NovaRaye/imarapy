@@ -6,13 +6,18 @@ pub const DELTA_TYPE_DELETE: &str = "Delete";
 pub const DELTA_TYPE_INSERT: &str = "Insert";
 pub const DELTA_TYPE_CHANGE: &str = "Change";
 
-fn collect_lines<'py>(_py: Python<'py>, seq: &Bound<'py, PyAny>) -> PyResult<Vec<String>> {
+fn collect_lines<'py>(_py: Python<'py>, seq: &Bound<'py, PyAny>) -> PyResult<Vec<Py<PyAny>>> {
     let mut out = Vec::new();
     for item in PyIterator::from_object(seq)? {
-        let item = item?;
-        out.push(item.extract::<String>()?);
+        out.push(Py::from(item?));
     }
     Ok(out)
+}
+
+fn py_eq<'py>(a: &Py<PyAny>, b: &Py<PyAny>, py: Python<'py>) -> PyResult<bool> {
+    let a_bound = a.bind(py);
+    let b_bound = b.bind(py);
+    a_bound.eq(b_bound)
 }
 
 #[pyfunction]
@@ -26,66 +31,131 @@ fn diff<'py>(
     let before_lines = collect_lines(py, before)?;
     let after_lines = collect_lines(py, after)?;
 
-    // DMP works on strings. We join lines with a unique separator to treat them as atomic units,
-    // or we use the char-based approach if the lines are short.
-    // However, dissimilar's diff(a, b) takes &str.
-    // To implement line-based diff with DMP "semantic cleanup" logic:
-    // We can use the same technique as many DMP wrappers: map each unique line to a character.
-
-    let mut interner = Vec::new();
+    // 将每个唯一的 Python 对象映射到一个字符
+    let mut interner: Vec<Py<PyAny>> = Vec::new();
     let mut before_chars = String::with_capacity(before_lines.len());
     for line in &before_lines {
-        let pos = interner.iter().position(|l| l == line);
-        let char_code = match pos {
-            Some(p) => p,
-            None => {
-                interner.push(line.clone());
+        let pos = interner
+            .iter()
+            .position(|l| py_eq(l, line, py).unwrap_or(false))
+            .unwrap_or_else(|| {
+                interner.push(line.clone_ref(py));
                 interner.len() - 1
-            }
-        };
-        before_chars.push(std::char::from_u32(char_code as u32).unwrap());
+            });
+        before_chars.push(std::char::from_u32(pos as u32).unwrap());
     }
 
     let mut after_chars = String::with_capacity(after_lines.len());
     for line in &after_lines {
-        let pos = interner.iter().position(|l| l == line);
-        let char_code = match pos {
-            Some(p) => p,
-            None => {
-                interner.push(line.clone());
+        let pos = interner
+            .iter()
+            .position(|l| py_eq(l, line, py).unwrap_or(false))
+            .unwrap_or_else(|| {
+                interner.push(line.clone_ref(py));
                 interner.len() - 1
-            }
-        };
-        after_chars.push(std::char::from_u32(char_code as u32).unwrap());
+            });
+        after_chars.push(std::char::from_u32(pos as u32).unwrap());
     }
 
+    // 使用 DMP 进行 diff
     let chunks = dmp_diff(&before_chars, &after_chars);
 
+    // 暂存连续的删除和插入以合并为 Change
+    #[derive(Default)]
+    struct Pending {
+        delete: Vec<u32>, // 存储字符索引
+        insert: Vec<u32>,
+    }
+
     let mut out = Vec::<PyObject>::new();
+    let mut pending = Pending::default();
     let mut src_pos = 0;
     let mut tgt_pos = 0;
+
+    let flush_pending = |out: &mut Vec<PyObject>,
+                         pending: &mut Pending,
+                         py: Python,
+                         interner: &[Py<PyAny>],
+                         src_pos: &mut i64,
+                         tgt_pos: &mut i64|
+     -> PyResult<()> {
+        if !pending.delete.is_empty() && !pending.insert.is_empty() {
+            // 合并为 Change
+            let delete_lines: Vec<Py<PyAny>> = pending
+                .delete
+                .iter()
+                .map(|&c| interner[c as usize].clone_ref(py))
+                .collect();
+            let insert_lines: Vec<Py<PyAny>> = pending
+                .insert
+                .iter()
+                .map(|&c| interner[c as usize].clone_ref(py))
+                .collect();
+            out.push(build_record(
+                py,
+                DELTA_TYPE_CHANGE,
+                *src_pos,
+                delete_lines,
+                *tgt_pos,
+                insert_lines,
+            )?);
+            *src_pos += pending.delete.len() as i64;
+            *tgt_pos += pending.insert.len() as i64;
+        } else if !pending.delete.is_empty() {
+            // 纯删除
+            let lines: Vec<Py<PyAny>> = pending
+                .delete
+                .iter()
+                .map(|&c| interner[c as usize].clone_ref(py))
+                .collect();
+            out.push(build_record(
+                py,
+                DELTA_TYPE_DELETE,
+                *src_pos,
+                lines,
+                *tgt_pos,
+                Vec::new(),
+            )?);
+            *src_pos += pending.delete.len() as i64;
+        } else if !pending.insert.is_empty() {
+            // 纯插入
+            let lines: Vec<Py<PyAny>> = pending
+                .insert
+                .iter()
+                .map(|&c| interner[c as usize].clone_ref(py))
+                .collect();
+            out.push(build_record(
+                py,
+                DELTA_TYPE_INSERT,
+                *src_pos,
+                Vec::new(),
+                *tgt_pos,
+                lines,
+            )?);
+            *tgt_pos += pending.insert.len() as i64;
+        }
+        pending.delete.clear();
+        pending.insert.clear();
+        Ok(())
+    };
 
     for chunk in chunks {
         match chunk {
             DmpChunk::Equal(text) => {
+                flush_pending(&mut out, &mut pending, py, &interner, &mut src_pos, &mut tgt_pos)?;
                 let len = text.chars().count() as i64;
                 src_pos += len;
                 tgt_pos += len;
             }
             DmpChunk::Delete(text) => {
-                let lines: Vec<String> = text.chars().map(|c| interner[c as u32 as usize].clone()).collect();
-                let len = lines.len() as i64;
-                out.push(build_record(py, DELTA_TYPE_DELETE, src_pos, lines.clone(), tgt_pos, Vec::new())?);
-                src_pos += len;
+                pending.delete.extend(text.chars().map(|c| c as u32));
             }
             DmpChunk::Insert(text) => {
-                let lines: Vec<String> = text.chars().map(|c| interner[c as u32 as usize].clone()).collect();
-                let len = lines.len() as i64;
-                out.push(build_record(py, DELTA_TYPE_INSERT, src_pos, Vec::new(), tgt_pos, lines.clone())?);
-                tgt_pos += len;
+                pending.insert.extend(text.chars().map(|c| c as u32));
             }
         }
     }
+    flush_pending(&mut out, &mut pending, py, &interner, &mut src_pos, &mut tgt_pos)?;
 
     Ok(out)
 }
@@ -132,9 +202,9 @@ fn build_record<'py>(
     py: Python<'py>,
     kind: &str,
     src_pos: i64,
-    src_lines: Vec<String>,
+    src_lines: Vec<Py<PyAny>>,
     tgt_pos: i64,
-    tgt_lines: Vec<String>,
+    tgt_lines: Vec<Py<PyAny>>,
 ) -> PyResult<PyObject> {
     let src_list = PyList::new(py, &src_lines)?;
     let tgt_list = PyList::new(py, &tgt_lines)?;
