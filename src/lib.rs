@@ -1,57 +1,18 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyIterator, PyList};
-
-use imara_diff::{Algorithm, Diff, InternedInput, TokenSource};
+use dissimilar::{diff as dmp_diff, Chunk as DmpChunk};
 
 pub const DELTA_TYPE_DELETE: &str = "Delete";
 pub const DELTA_TYPE_INSERT: &str = "Insert";
 pub const DELTA_TYPE_CHANGE: &str = "Change";
 
-struct TokenVec<'a>(&'a [u32]);
-impl<'a> TokenSource for TokenVec<'a> {
-    type Token = u32;
-    type Tokenizer = std::iter::Copied<std::slice::Iter<'a, u32>>;
-    #[inline]
-    fn tokenize(&self) -> Self::Tokenizer {
-        self.0.iter().copied()
-    }
-    #[inline]
-    fn estimate_tokens(&self) -> u32 {
-        self.0.len() as u32
-    }
-}
-
-fn collect_lines<'py>(_py: Python<'py>, seq: &Bound<'py, PyAny>) -> PyResult<Vec<Py<PyAny>>> {
+fn collect_lines<'py>(_py: Python<'py>, seq: &Bound<'py, PyAny>) -> PyResult<Vec<String>> {
     let mut out = Vec::new();
     for item in PyIterator::from_object(seq)? {
-        out.push(Py::from(item?));
+        let item = item?;
+        out.push(item.extract::<String>()?);
     }
     Ok(out)
-}
-
-fn tokenize_exact<'py>(
-    py: Python<'py>,
-    lines: &[Py<PyAny>],
-    interner: &mut Vec<Py<PyAny>>,
-) -> PyResult<Vec<u32>> {
-    let mut tokens = Vec::with_capacity(lines.len());
-    for line in lines {
-        let id = interner
-            .iter()
-            .position(|rep| {
-                line.bind(py)
-                    .rich_compare(rep.bind(py), pyo3::basic::CompareOp::Eq)
-                    .and_then(|b| b.is_truthy())
-                    .unwrap_or(false)
-            })
-            .map(|idx| idx as u32)
-            .unwrap_or_else(|| {
-                interner.push(line.clone_ref(py));
-                (interner.len() - 1) as u32
-            });
-        tokens.push(id);
-    }
-    Ok(tokens)
 }
 
 #[pyfunction]
@@ -62,82 +23,70 @@ fn diff<'py>(
     after: &Bound<'py, PyAny>,
     algorithm: &str,
 ) -> PyResult<Vec<PyObject>> {
-    let alg = match algorithm.to_lowercase().as_str() {
-        "histogram" => Algorithm::Histogram,
-        "myers" => Algorithm::Myers,
-        _ => {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "Unknown algorithm: {}",
-                algorithm
-            )));
-        }
-    };
+    let before_lines = collect_lines(py, before)?;
+    let after_lines = collect_lines(py, after)?;
 
-    let before_vec = collect_lines(py, before)?;
-    let after_vec = collect_lines(py, after)?;
+    // DMP works on strings. We join lines with a unique separator to treat them as atomic units,
+    // or we use the char-based approach if the lines are short.
+    // However, dissimilar's diff(a, b) takes &str.
+    // To implement line-based diff with DMP "semantic cleanup" logic:
+    // We can use the same technique as many DMP wrappers: map each unique line to a character.
 
     let mut interner = Vec::new();
-    let before_tok = tokenize_exact(py, &before_vec, &mut interner)?;
-    let after_tok = tokenize_exact(py, &after_vec, &mut interner)?;
+    let mut before_chars = String::with_capacity(before_lines.len());
+    for line in &before_lines {
+        let pos = interner.iter().position(|l| l == line);
+        let char_code = match pos {
+            Some(p) => p,
+            None => {
+                interner.push(line.clone());
+                interner.len() - 1
+            }
+        };
+        before_chars.push(std::char::from_u32(char_code as u32).unwrap());
+    }
 
-    let input = InternedInput::new(TokenVec(&before_tok), TokenVec(&after_tok));
-    let mut diff = Diff::compute(alg, &input);
-    diff.postprocess_no_heuristic(&input);
+    let mut after_chars = String::with_capacity(after_lines.len());
+    for line in &after_lines {
+        let pos = interner.iter().position(|l| l == line);
+        let char_code = match pos {
+            Some(p) => p,
+            None => {
+                interner.push(line.clone());
+                interner.len() - 1
+            }
+        };
+        after_chars.push(std::char::from_u32(char_code as u32).unwrap());
+    }
+
+    let chunks = dmp_diff(&before_chars, &after_chars);
 
     let mut out = Vec::<PyObject>::new();
-    for h in diff.hunks() {
-        let src_pos = h.before.start as i64;
-        let tgt_pos = h.after.start as i64;
+    let mut src_pos = 0;
+    let mut tgt_pos = 0;
 
-        if h.is_pure_removal() {
-            let lines = h
-                .before
-                .clone()
-                .map(|i| before_vec[i as usize].clone_ref(py))
-                .collect();
-            out.push(build_record(
-                py,
-                DELTA_TYPE_DELETE,
-                src_pos,
-                lines,
-                tgt_pos,
-                Vec::new(),
-            )?);
-        } else if h.is_pure_insertion() {
-            let lines = h
-                .after
-                .clone()
-                .map(|j| after_vec[j as usize].clone_ref(py))
-                .collect();
-            out.push(build_record(
-                py,
-                DELTA_TYPE_INSERT,
-                src_pos,
-                Vec::new(),
-                tgt_pos,
-                lines,
-            )?);
-        } else {
-            let src_lines = h
-                .before
-                .clone()
-                .map(|i| before_vec[i as usize].clone_ref(py))
-                .collect();
-            let tgt_lines = h
-                .after
-                .clone()
-                .map(|j| after_vec[j as usize].clone_ref(py))
-                .collect();
-            out.push(build_record(
-                py,
-                DELTA_TYPE_CHANGE,
-                src_pos,
-                src_lines,
-                tgt_pos,
-                tgt_lines,
-            )?);
+    for chunk in chunks {
+        match chunk {
+            DmpChunk::Equal(text) => {
+                let len = text.chars().count() as i64;
+                src_pos += len;
+                tgt_pos += len;
+            }
+            DmpChunk::Delete(text) => {
+                let lines: Vec<String> = text.chars().map(|c| interner[c as u32 as usize].clone()).collect();
+                let len = lines.len() as i64;
+                out.push(build_record(py, DELTA_TYPE_DELETE, src_pos, lines.clone(), tgt_pos, Vec::new())?);
+                src_pos += len;
+            }
+            DmpChunk::Insert(text) => {
+                let lines: Vec<String> = text.chars().map(|c| interner[c as u32 as usize].clone()).collect();
+                let len = lines.len() as i64;
+                out.push(build_record(py, DELTA_TYPE_INSERT, src_pos, Vec::new(), tgt_pos, lines.clone())?);
+                tgt_pos += len;
+            }
         }
     }
+
     Ok(out)
 }
 
@@ -183,14 +132,13 @@ fn build_record<'py>(
     py: Python<'py>,
     kind: &str,
     src_pos: i64,
-    src_lines: Vec<Py<PyAny>>,
+    src_lines: Vec<String>,
     tgt_pos: i64,
-    tgt_lines: Vec<Py<PyAny>>,
+    tgt_lines: Vec<String>,
 ) -> PyResult<PyObject> {
     let src_list = PyList::new(py, &src_lines)?;
     let tgt_list = PyList::new(py, &tgt_lines)?;
 
-    // Create source and target objects
     let source = Py::new(
         py,
         Chunk {
