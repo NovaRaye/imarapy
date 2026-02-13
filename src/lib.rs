@@ -28,6 +28,7 @@ fn diff<'py>(
     after: &Bound<'py, PyAny>,
     algorithm: &str,
 ) -> PyResult<Vec<PyObject>> {
+    let _ = algorithm;
     let before_lines = collect_lines(py, before)?;
     let after_lines = collect_lines(py, after)?;
 
@@ -42,7 +43,8 @@ fn diff<'py>(
                 interner.push(line.clone_ref(py));
                 interner.len() - 1
             });
-        before_chars.push(std::char::from_u32(pos as u32).unwrap());
+        // 增加偏移量 1，避免映射到 U+0000 导致 DMP 字符串截断
+        before_chars.push(std::char::from_u32(pos as u32 + 1).unwrap());
     }
 
     let mut after_chars = String::with_capacity(after_lines.len());
@@ -54,108 +56,100 @@ fn diff<'py>(
                 interner.push(line.clone_ref(py));
                 interner.len() - 1
             });
-        after_chars.push(std::char::from_u32(pos as u32).unwrap());
+        // 增加偏移量 1
+        after_chars.push(std::char::from_u32(pos as u32 + 1).unwrap());
     }
 
     // 使用 DMP 进行 diff
     let chunks = dmp_diff(&before_chars, &after_chars);
 
-    // 暂存连续的删除和插入以合并为 Change
+    let mut out = Vec::<PyObject>::new();
+    let mut src_pos: i64 = 0;
+    let mut tgt_pos: i64 = 0;
+
     #[derive(Default)]
     struct Pending {
-        delete: Vec<u32>, // 存储字符索引
-        insert: Vec<u32>,
+        delete: Vec<Py<PyAny>>,
+        insert: Vec<Py<PyAny>>,
+        src_start: i64,
+        tgt_start: i64,
     }
 
-    let mut out = Vec::<PyObject>::new();
-    let mut pending = Pending::default();
-    let mut src_pos = 0;
-    let mut tgt_pos = 0;
+    let mut pending = Pending {
+        src_start: 0,
+        tgt_start: 0,
+        ..Default::default()
+    };
 
-    let flush_pending = |out: &mut Vec<PyObject>,
-                         pending: &mut Pending,
-                         py: Python,
-                         interner: &[Py<PyAny>],
-                         src_pos: &mut i64,
-                         tgt_pos: &mut i64|
-     -> PyResult<()> {
+    let flush_pending = |out: &mut Vec<PyObject>, pending: &mut Pending, py: Python| -> PyResult<()> {
         if !pending.delete.is_empty() && !pending.insert.is_empty() {
-            // 合并为 Change
-            let delete_lines: Vec<Py<PyAny>> = pending
-                .delete
-                .iter()
-                .map(|&c| interner[c as usize].clone_ref(py))
-                .collect();
-            let insert_lines: Vec<Py<PyAny>> = pending
-                .insert
-                .iter()
-                .map(|&c| interner[c as usize].clone_ref(py))
-                .collect();
             out.push(build_record(
                 py,
                 DELTA_TYPE_CHANGE,
-                *src_pos,
-                delete_lines,
-                *tgt_pos,
-                insert_lines,
+                pending.src_start,
+                std::mem::take(&mut pending.delete),
+                pending.tgt_start,
+                std::mem::take(&mut pending.insert),
             )?);
-            *src_pos += pending.delete.len() as i64;
-            *tgt_pos += pending.insert.len() as i64;
         } else if !pending.delete.is_empty() {
-            // 纯删除
-            let lines: Vec<Py<PyAny>> = pending
-                .delete
-                .iter()
-                .map(|&c| interner[c as usize].clone_ref(py))
-                .collect();
             out.push(build_record(
                 py,
                 DELTA_TYPE_DELETE,
-                *src_pos,
-                lines,
-                *tgt_pos,
+                pending.src_start,
+                std::mem::take(&mut pending.delete),
+                pending.tgt_start,
                 Vec::new(),
             )?);
-            *src_pos += pending.delete.len() as i64;
         } else if !pending.insert.is_empty() {
-            // 纯插入
-            let lines: Vec<Py<PyAny>> = pending
-                .insert
-                .iter()
-                .map(|&c| interner[c as usize].clone_ref(py))
-                .collect();
             out.push(build_record(
                 py,
                 DELTA_TYPE_INSERT,
-                *src_pos,
+                pending.src_start,
                 Vec::new(),
-                *tgt_pos,
-                lines,
+                pending.tgt_start,
+                std::mem::take(&mut pending.insert),
             )?);
-            *tgt_pos += pending.insert.len() as i64;
         }
-        pending.delete.clear();
-        pending.insert.clear();
         Ok(())
     };
 
     for chunk in chunks {
         match chunk {
             DmpChunk::Equal(text) => {
-                flush_pending(&mut out, &mut pending, py, &interner, &mut src_pos, &mut tgt_pos)?;
+                flush_pending(&mut out, &mut pending, py)?;
                 let len = text.chars().count() as i64;
                 src_pos += len;
                 tgt_pos += len;
             }
             DmpChunk::Delete(text) => {
-                pending.delete.extend(text.chars().map(|c| c as u32));
+                if pending.delete.is_empty() && pending.insert.is_empty() {
+                    pending.src_start = src_pos;
+                    pending.tgt_start = tgt_pos;
+                }
+                let len = text.chars().count() as i64;
+                pending.delete.extend(
+                    before_lines[src_pos as usize..(src_pos + len) as usize]
+                        .iter()
+                        .map(|obj| obj.clone_ref(py)),
+                );
+                src_pos += len;
             }
             DmpChunk::Insert(text) => {
-                pending.insert.extend(text.chars().map(|c| c as u32));
+                if pending.delete.is_empty() && pending.insert.is_empty() {
+                    pending.src_start = src_pos;
+                    pending.tgt_start = tgt_pos;
+                }
+                let len = text.chars().count() as i64;
+                pending.insert.extend(
+                    after_lines[tgt_pos as usize..(tgt_pos + len) as usize]
+                        .iter()
+                        .map(|obj| obj.clone_ref(py)),
+                );
+                tgt_pos += len;
             }
         }
     }
-    flush_pending(&mut out, &mut pending, py, &interner, &mut src_pos, &mut tgt_pos)?;
+    flush_pending(&mut out, &mut pending, py)?;
 
     Ok(out)
 }
