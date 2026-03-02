@@ -15,19 +15,16 @@ def print_git_style_diff(differences):
         tgt_count = len(tgt_lines) if tgt_lines else 0
         
         if diff_type == imarapy.DELTA_TYPE_INSERT:
-            print('insert')
             print(f"@@ -{src_pos},0 +{tgt_pos},{tgt_count} @@")
             for line in tgt_lines:
                 print(f"+ {line}")
                 
         elif diff_type == imarapy.DELTA_TYPE_DELETE:
-            print('delete')
             print(f"@@ -{src_pos},{src_count} +{tgt_pos},0 @@")
             for line in src_lines:
                 print(f"- {line}")
                 
         elif diff_type == imarapy.DELTA_TYPE_CHANGE:
-            print('change')
             print(f"@@ -{src_pos},{src_count} +{tgt_pos},{tgt_count} @@")
             for line in src_lines:
                 print(f"- {line}")
@@ -40,16 +37,28 @@ def print_git_style_diff(differences):
 def diff_demo():
     
     original_config_str = """\
-    A
-    B
-    C
-    D"""
+    {
+        "version": "1.0.0",
+        "database": {
+            "host": "localhost",
+            "port": 5432
+        },
+        "logging": "info"
+    }"""
     
     new_config_str = """\
-    A
-    E
-    F
-    D"""
+    {
+        "version": "1.1.0",
+        "database": {
+            "host": "db.example.com",
+            "port": 5432,
+            "username": "admin"
+        },
+        "logging": "debug",
+        "features": {
+            "experimental": true
+        }
+    }"""
     
     original_config = original_config_str.splitlines()
     new_config = new_config_str.splitlines()

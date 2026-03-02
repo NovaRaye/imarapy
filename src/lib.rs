@@ -1,10 +1,25 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyIterator, PyList};
-use dissimilar::{diff as dmp_diff, Chunk as DmpChunk};
+
+use imara_diff::{Algorithm, Diff, InternedInput, TokenSource};
 
 pub const DELTA_TYPE_DELETE: &str = "Delete";
 pub const DELTA_TYPE_INSERT: &str = "Insert";
 pub const DELTA_TYPE_CHANGE: &str = "Change";
+
+struct TokenVec<'a>(&'a [u32]);
+impl<'a> TokenSource for TokenVec<'a> {
+    type Token = u32;
+    type Tokenizer = std::iter::Copied<std::slice::Iter<'a, u32>>;
+    #[inline]
+    fn tokenize(&self) -> Self::Tokenizer {
+        self.0.iter().copied()
+    }
+    #[inline]
+    fn estimate_tokens(&self) -> u32 {
+        self.0.len() as u32
+    }
+}
 
 fn collect_lines<'py>(_py: Python<'py>, seq: &Bound<'py, PyAny>) -> PyResult<Vec<Py<PyAny>>> {
     let mut out = Vec::new();
@@ -14,10 +29,29 @@ fn collect_lines<'py>(_py: Python<'py>, seq: &Bound<'py, PyAny>) -> PyResult<Vec
     Ok(out)
 }
 
-fn py_eq<'py>(a: &Py<PyAny>, b: &Py<PyAny>, py: Python<'py>) -> PyResult<bool> {
-    let a_bound = a.bind(py);
-    let b_bound = b.bind(py);
-    a_bound.eq(b_bound)
+fn tokenize_exact<'py>(
+    py: Python<'py>,
+    lines: &[Py<PyAny>],
+    interner: &mut Vec<Py<PyAny>>,
+) -> PyResult<Vec<u32>> {
+    let mut tokens = Vec::with_capacity(lines.len());
+    for line in lines {
+        let id = interner
+            .iter()
+            .position(|rep| {
+                line.bind(py)
+                    .rich_compare(rep.bind(py), pyo3::basic::CompareOp::Eq)
+                    .and_then(|b| b.is_truthy())
+                    .unwrap_or(false)
+            })
+            .map(|idx| idx as u32)
+            .unwrap_or_else(|| {
+                interner.push(line.clone_ref(py));
+                (interner.len() - 1) as u32
+            });
+        tokens.push(id);
+    }
+    Ok(tokens)
 }
 
 #[pyfunction]
@@ -28,129 +62,82 @@ fn diff<'py>(
     after: &Bound<'py, PyAny>,
     algorithm: &str,
 ) -> PyResult<Vec<PyObject>> {
-    let _ = algorithm;
-    let before_lines = collect_lines(py, before)?;
-    let after_lines = collect_lines(py, after)?;
-
-    // 将每个唯一的 Python 对象映射到一个字符
-    let mut interner: Vec<Py<PyAny>> = Vec::new();
-    let mut before_chars = String::with_capacity(before_lines.len());
-    for line in &before_lines {
-        let pos = interner
-            .iter()
-            .position(|l| py_eq(l, line, py).unwrap_or(false))
-            .unwrap_or_else(|| {
-                interner.push(line.clone_ref(py));
-                interner.len() - 1
-            });
-        // 增加偏移量 1，避免映射到 U+0000 导致 DMP 字符串截断
-        before_chars.push(std::char::from_u32(pos as u32 + 1).unwrap());
-    }
-
-    let mut after_chars = String::with_capacity(after_lines.len());
-    for line in &after_lines {
-        let pos = interner
-            .iter()
-            .position(|l| py_eq(l, line, py).unwrap_or(false))
-            .unwrap_or_else(|| {
-                interner.push(line.clone_ref(py));
-                interner.len() - 1
-            });
-        // 增加偏移量 1
-        after_chars.push(std::char::from_u32(pos as u32 + 1).unwrap());
-    }
-
-    // 使用 DMP 进行 diff
-    let chunks = dmp_diff(&before_chars, &after_chars);
-
-    let mut out = Vec::<PyObject>::new();
-    let mut src_pos: i64 = 0;
-    let mut tgt_pos: i64 = 0;
-
-    #[derive(Default)]
-    struct Pending {
-        delete: Vec<Py<PyAny>>,
-        insert: Vec<Py<PyAny>>,
-        src_start: i64,
-        tgt_start: i64,
-    }
-
-    let mut pending = Pending {
-        src_start: 0,
-        tgt_start: 0,
-        ..Default::default()
+    let alg = match algorithm.to_lowercase().as_str() {
+        "histogram" => Algorithm::Histogram,
+        "myers" => Algorithm::Myers,
+        _ => {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Unknown algorithm: {}",
+                algorithm
+            )));
+        }
     };
 
-    let flush_pending = |out: &mut Vec<PyObject>, pending: &mut Pending, py: Python| -> PyResult<()> {
-        if !pending.delete.is_empty() && !pending.insert.is_empty() {
-            out.push(build_record(
-                py,
-                DELTA_TYPE_CHANGE,
-                pending.src_start,
-                std::mem::take(&mut pending.delete),
-                pending.tgt_start,
-                std::mem::take(&mut pending.insert),
-            )?);
-        } else if !pending.delete.is_empty() {
+    let before_vec = collect_lines(py, before)?;
+    let after_vec = collect_lines(py, after)?;
+
+    let mut interner = Vec::new();
+    let before_tok = tokenize_exact(py, &before_vec, &mut interner)?;
+    let after_tok = tokenize_exact(py, &after_vec, &mut interner)?;
+
+    let input = InternedInput::new(TokenVec(&before_tok), TokenVec(&after_tok));
+    let mut diff = Diff::compute(alg, &input);
+    diff.postprocess_no_heuristic(&input);
+
+    let mut out = Vec::<PyObject>::new();
+    for h in diff.hunks() {
+        let src_pos = h.before.start as i64;
+        let tgt_pos = h.after.start as i64;
+
+        if h.is_pure_removal() {
+            let lines = h
+                .before
+                .clone()
+                .map(|i| before_vec[i as usize].clone_ref(py))
+                .collect();
             out.push(build_record(
                 py,
                 DELTA_TYPE_DELETE,
-                pending.src_start,
-                std::mem::take(&mut pending.delete),
-                pending.tgt_start,
+                src_pos,
+                lines,
+                tgt_pos,
                 Vec::new(),
             )?);
-        } else if !pending.insert.is_empty() {
+        } else if h.is_pure_insertion() {
+            let lines = h
+                .after
+                .clone()
+                .map(|j| after_vec[j as usize].clone_ref(py))
+                .collect();
             out.push(build_record(
                 py,
                 DELTA_TYPE_INSERT,
-                pending.src_start,
+                src_pos,
                 Vec::new(),
-                pending.tgt_start,
-                std::mem::take(&mut pending.insert),
+                tgt_pos,
+                lines,
+            )?);
+        } else {
+            let src_lines = h
+                .before
+                .clone()
+                .map(|i| before_vec[i as usize].clone_ref(py))
+                .collect();
+            let tgt_lines = h
+                .after
+                .clone()
+                .map(|j| after_vec[j as usize].clone_ref(py))
+                .collect();
+            out.push(build_record(
+                py,
+                DELTA_TYPE_CHANGE,
+                src_pos,
+                src_lines,
+                tgt_pos,
+                tgt_lines,
             )?);
         }
-        Ok(())
-    };
-
-    for chunk in chunks {
-        match chunk {
-            DmpChunk::Equal(text) => {
-                flush_pending(&mut out, &mut pending, py)?;
-                let len = text.chars().count() as i64;
-                src_pos += len;
-                tgt_pos += len;
-            }
-            DmpChunk::Delete(text) => {
-                if pending.delete.is_empty() && pending.insert.is_empty() {
-                    pending.src_start = src_pos;
-                    pending.tgt_start = tgt_pos;
-                }
-                let len = text.chars().count() as i64;
-                pending.delete.extend(
-                    before_lines[src_pos as usize..(src_pos + len) as usize]
-                        .iter()
-                        .map(|obj| obj.clone_ref(py)),
-                );
-                src_pos += len;
-            }
-            DmpChunk::Insert(text) => {
-                if pending.delete.is_empty() && pending.insert.is_empty() {
-                    pending.src_start = src_pos;
-                    pending.tgt_start = tgt_pos;
-                }
-                let len = text.chars().count() as i64;
-                pending.insert.extend(
-                    after_lines[tgt_pos as usize..(tgt_pos + len) as usize]
-                        .iter()
-                        .map(|obj| obj.clone_ref(py)),
-                );
-                tgt_pos += len;
-            }
-        }
     }
-    flush_pending(&mut out, &mut pending, py)?;
-
     Ok(out)
 }
 
@@ -203,6 +190,7 @@ fn build_record<'py>(
     let src_list = PyList::new(py, &src_lines)?;
     let tgt_list = PyList::new(py, &tgt_lines)?;
 
+    // Create source and target objects
     let source = Py::new(
         py,
         Chunk {
