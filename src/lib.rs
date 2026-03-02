@@ -1,6 +1,7 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyIterator, PyList};
 
+use dissimilar::{diff as dmp_diff, Chunk as DmpChunk};
 use imara_diff::{Algorithm, Diff, InternedInput, TokenSource};
 
 pub const DELTA_TYPE_DELETE: &str = "Delete";
@@ -54,31 +55,19 @@ fn tokenize_exact<'py>(
     Ok(tokens)
 }
 
-#[pyfunction]
-#[pyo3(signature = (before, after, algorithm = "histogram"))]
-fn diff<'py>(
+fn py_eq<'py>(a: &Py<PyAny>, b: &Py<PyAny>, py: Python<'py>) -> bool {
+    a.bind(py).eq(b.bind(py)).unwrap_or(false)
+}
+
+fn diff_imara<'py>(
     py: Python<'py>,
-    before: &Bound<'py, PyAny>,
-    after: &Bound<'py, PyAny>,
-    algorithm: &str,
+    before_vec: &[Py<PyAny>],
+    after_vec: &[Py<PyAny>],
+    alg: Algorithm,
 ) -> PyResult<Vec<PyObject>> {
-    let alg = match algorithm.to_lowercase().as_str() {
-        "histogram" => Algorithm::Histogram,
-        "myers" => Algorithm::Myers,
-        _ => {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "Unknown algorithm: {}",
-                algorithm
-            )));
-        }
-    };
-
-    let before_vec = collect_lines(py, before)?;
-    let after_vec = collect_lines(py, after)?;
-
     let mut interner = Vec::new();
-    let before_tok = tokenize_exact(py, &before_vec, &mut interner)?;
-    let after_tok = tokenize_exact(py, &after_vec, &mut interner)?;
+    let before_tok = tokenize_exact(py, before_vec, &mut interner)?;
+    let after_tok = tokenize_exact(py, after_vec, &mut interner)?;
 
     let input = InternedInput::new(TokenVec(&before_tok), TokenVec(&after_tok));
     let mut diff = Diff::compute(alg, &input);
@@ -90,55 +79,117 @@ fn diff<'py>(
         let tgt_pos = h.after.start as i64;
 
         if h.is_pure_removal() {
-            let lines = h
-                .before
-                .clone()
-                .map(|i| before_vec[i as usize].clone_ref(py))
-                .collect();
-            out.push(build_record(
-                py,
-                DELTA_TYPE_DELETE,
-                src_pos,
-                lines,
-                tgt_pos,
-                Vec::new(),
-            )?);
+            let lines = h.before.clone().map(|i| before_vec[i as usize].clone_ref(py)).collect();
+            out.push(build_record(py, DELTA_TYPE_DELETE, src_pos, lines, tgt_pos, Vec::new())?);
         } else if h.is_pure_insertion() {
-            let lines = h
-                .after
-                .clone()
-                .map(|j| after_vec[j as usize].clone_ref(py))
-                .collect();
-            out.push(build_record(
-                py,
-                DELTA_TYPE_INSERT,
-                src_pos,
-                Vec::new(),
-                tgt_pos,
-                lines,
-            )?);
+            let lines = h.after.clone().map(|j| after_vec[j as usize].clone_ref(py)).collect();
+            out.push(build_record(py, DELTA_TYPE_INSERT, src_pos, Vec::new(), tgt_pos, lines)?);
         } else {
-            let src_lines = h
-                .before
-                .clone()
-                .map(|i| before_vec[i as usize].clone_ref(py))
-                .collect();
-            let tgt_lines = h
-                .after
-                .clone()
-                .map(|j| after_vec[j as usize].clone_ref(py))
-                .collect();
-            out.push(build_record(
-                py,
-                DELTA_TYPE_CHANGE,
-                src_pos,
-                src_lines,
-                tgt_pos,
-                tgt_lines,
-            )?);
+            let src_lines = h.before.clone().map(|i| before_vec[i as usize].clone_ref(py)).collect();
+            let tgt_lines = h.after.clone().map(|j| after_vec[j as usize].clone_ref(py)).collect();
+            out.push(build_record(py, DELTA_TYPE_CHANGE, src_pos, src_lines, tgt_pos, tgt_lines)?);
         }
     }
     Ok(out)
+}
+
+fn diff_dmp<'py>(
+    py: Python<'py>,
+    before_vec: &[Py<PyAny>],
+    after_vec: &[Py<PyAny>],
+) -> PyResult<Vec<PyObject>> {
+    let mut interner: Vec<Py<PyAny>> = Vec::new();
+
+    let mut before_chars = String::with_capacity(before_vec.len());
+    for line in before_vec {
+        let pos = interner
+            .iter()
+            .position(|l| py_eq(l, line, py))
+            .unwrap_or_else(|| { interner.push(line.clone_ref(py)); interner.len() - 1 });
+        before_chars.push(char::from_u32(pos as u32 + 1).unwrap());
+    }
+
+    let mut after_chars = String::with_capacity(after_vec.len());
+    for line in after_vec {
+        let pos = interner
+            .iter()
+            .position(|l| py_eq(l, line, py))
+            .unwrap_or_else(|| { interner.push(line.clone_ref(py)); interner.len() - 1 });
+        after_chars.push(char::from_u32(pos as u32 + 1).unwrap());
+    }
+
+    let chunks = dmp_diff(&before_chars, &after_chars);
+
+    let mut out = Vec::<PyObject>::new();
+    let mut src_pos: i64 = 0;
+    let mut tgt_pos: i64 = 0;
+
+    struct Pending { delete: Vec<Py<PyAny>>, insert: Vec<Py<PyAny>>, src_start: i64, tgt_start: i64 }
+    let mut pending = Pending { delete: vec![], insert: vec![], src_start: 0, tgt_start: 0 };
+
+    let flush = |out: &mut Vec<PyObject>, p: &mut Pending, py: Python| -> PyResult<()> {
+        if !p.delete.is_empty() && !p.insert.is_empty() {
+            out.push(build_record(py, DELTA_TYPE_CHANGE, p.src_start, std::mem::take(&mut p.delete), p.tgt_start, std::mem::take(&mut p.insert))?);
+        } else if !p.delete.is_empty() {
+            out.push(build_record(py, DELTA_TYPE_DELETE, p.src_start, std::mem::take(&mut p.delete), p.tgt_start, vec![])?);
+        } else if !p.insert.is_empty() {
+            out.push(build_record(py, DELTA_TYPE_INSERT, p.src_start, vec![], p.tgt_start, std::mem::take(&mut p.insert))?);
+        }
+        Ok(())
+    };
+
+    for chunk in chunks {
+        match chunk {
+            DmpChunk::Equal(text) => {
+                flush(&mut out, &mut pending, py)?;
+                let len = text.chars().count() as i64;
+                src_pos += len;
+                tgt_pos += len;
+            }
+            DmpChunk::Delete(text) => {
+                if pending.delete.is_empty() && pending.insert.is_empty() {
+                    pending.src_start = src_pos;
+                    pending.tgt_start = tgt_pos;
+                }
+                let len = text.chars().count() as i64;
+                pending.delete.extend(before_vec[src_pos as usize..(src_pos + len) as usize].iter().map(|o| o.clone_ref(py)));
+                src_pos += len;
+            }
+            DmpChunk::Insert(text) => {
+                if pending.delete.is_empty() && pending.insert.is_empty() {
+                    pending.src_start = src_pos;
+                    pending.tgt_start = tgt_pos;
+                }
+                let len = text.chars().count() as i64;
+                pending.insert.extend(after_vec[tgt_pos as usize..(tgt_pos + len) as usize].iter().map(|o| o.clone_ref(py)));
+                tgt_pos += len;
+            }
+        }
+    }
+    flush(&mut out, &mut pending, py)?;
+
+    Ok(out)
+}
+
+#[pyfunction]
+#[pyo3(signature = (before, after, algorithm = "histogram"))]
+fn diff<'py>(
+    py: Python<'py>,
+    before: &Bound<'py, PyAny>,
+    after: &Bound<'py, PyAny>,
+    algorithm: &str,
+) -> PyResult<Vec<PyObject>> {
+    let before_vec = collect_lines(py, before)?;
+    let after_vec = collect_lines(py, after)?;
+
+    match algorithm.to_lowercase().as_str() {
+        "dmp" => diff_dmp(py, &before_vec, &after_vec),
+        "histogram" => diff_imara(py, &before_vec, &after_vec, Algorithm::Histogram),
+        "myers" => diff_imara(py, &before_vec, &after_vec, Algorithm::Myers),
+        _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "Unknown algorithm: {}", algorithm
+        ))),
+    }
 }
 
 #[pyclass]

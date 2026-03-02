@@ -1,11 +1,15 @@
 import imarapy
 import unittest
 
+def diff(*args, **kwargs):
+    kwargs.setdefault("algorithm", "dmp")
+    return imarapy.diff(*args, **kwargs)
+
 class TestImaraPy(unittest.TestCase):
     def test_basic_strings(self):
         before = ["line1", "line2", "line3"]
         after = ["line1", "new_line", "line3"]
-        deltas = imarapy.diff(before, after)
+        deltas = diff(before, after)
         self.assertEqual(len(deltas), 1)
         self.assertEqual(deltas[0].type, imarapy.DELTA_TYPE_CHANGE)
         self.assertEqual(deltas[0].source.position, 1)
@@ -16,7 +20,7 @@ class TestImaraPy(unittest.TestCase):
     def test_insert_delete(self):
         before = ["A", "B"]
         after = ["A", "B", "C"]
-        deltas = imarapy.diff(before, after)
+        deltas = diff(before, after)
         self.assertEqual(len(deltas), 1)
         self.assertEqual(deltas[0].type, imarapy.DELTA_TYPE_INSERT)
         self.assertEqual(deltas[0].source.position, 2)
@@ -25,7 +29,7 @@ class TestImaraPy(unittest.TestCase):
 
         before = ["A", "B", "C"]
         after = ["A", "B"]
-        deltas = imarapy.diff(before, after)
+        deltas = diff(before, after)
         self.assertEqual(len(deltas), 1)
         self.assertEqual(deltas[0].type, imarapy.DELTA_TYPE_DELETE)
         self.assertEqual(deltas[0].source.position, 2)
@@ -35,7 +39,7 @@ class TestImaraPy(unittest.TestCase):
     def test_multiple_changes(self):
         before = ["A", "B", "C", "D", "E"]
         after = ["A", "X", "Y", "Z", "E"]
-        deltas = imarapy.diff(before, after)
+        deltas = diff(before, after)
         self.assertEqual(len(deltas), 1)
         self.assertEqual(deltas[0].source.position, 1)
         self.assertEqual(deltas[0].target.position, 1)
@@ -44,7 +48,7 @@ class TestImaraPy(unittest.TestCase):
     def test_discrete_changes(self):
         before = ["A", "B", "C1", "C2", "C3", "C4", "C5", "D", "E"]
         after = ["A", "X", "C1", "C2", "C3", "C4", "C5", "Y", "E"]
-        deltas = imarapy.diff(before, after)
+        deltas = diff(before, after)
         self.assertEqual(len(deltas), 2)
         self.assertEqual(deltas[0].source.position, 1)
         self.assertEqual(deltas[0].target.position, 1)
@@ -54,7 +58,7 @@ class TestImaraPy(unittest.TestCase):
     def test_swap_elements(self):
         before = ["A", "B"]
         after = ["B", "A"]
-        deltas = imarapy.diff(before, after)
+        deltas = diff(before, after)
         for delta in deltas:
             self.assertGreaterEqual(delta.source.position, 0)
             self.assertGreaterEqual(delta.target.position, 0)
@@ -77,7 +81,7 @@ class TestImaraPy(unittest.TestCase):
         obj_b2 = Token("B", 2)
         before = [obj_a1, obj_b1]
         after = [obj_b2, obj_a2]
-        deltas = imarapy.diff(before, after)
+        deltas = diff(before, after)
         for delta in deltas:
             for line in delta.source.lines:
                 self.assertTrue(any(line is orig for orig in before))
@@ -96,15 +100,15 @@ class TestImaraPy(unittest.TestCase):
                 return f"'{self.s}'"
         before = [CaseInsensitiveStr("APPLE"), CaseInsensitiveStr("BANANA")]
         after = [CaseInsensitiveStr("apple"), CaseInsensitiveStr("cherry")]
-        deltas = imarapy.diff(before, after)
+        deltas = diff(before, after)
         self.assertEqual(len(deltas), 1)
         self.assertEqual(deltas[0].source.position, 1)
         self.assertEqual(deltas[0].target.position, 1)
 
     def test_empty_and_single(self):
-        self.assertEqual(len(imarapy.diff(["A"], ["A"])), 0)
-        self.assertEqual(len(imarapy.diff([], [])), 0)
-        deltas = imarapy.diff(["A"], ["B"])
+        self.assertEqual(len(diff(["A"], ["A"])), 0)
+        self.assertEqual(len(diff([], [])), 0)
+        deltas = diff(["A"], ["B"])
         self.assertEqual(len(deltas), 1)
         self.assertEqual(deltas[0].source.position, 0)
         self.assertEqual(deltas[0].target.position, 0)
@@ -112,7 +116,7 @@ class TestImaraPy(unittest.TestCase):
     def test_repeated_elements(self):
         before = ["A", "A", "A"]
         after = ["A", "B", "A"]
-        deltas = imarapy.diff(before, after)
+        deltas = diff(before, after)
         self.assertEqual(len(deltas), 1)
         self.assertEqual(deltas[0].source.position, 1)
         self.assertEqual(deltas[0].target.position, 1)
@@ -121,7 +125,7 @@ class TestImaraPy(unittest.TestCase):
         before = [{"id": 1}, {"id": 2}]
         after = [{"id": 1}, {"id": 3}]
         try:
-            deltas = imarapy.diff(before, after)
+            deltas = diff(before, after)
             self.assertEqual(len(deltas), 1)
             self.assertEqual(deltas[0].source.position, 1)
         except TypeError:
@@ -133,7 +137,7 @@ class TestImaraPy(unittest.TestCase):
         after[50] = "changed"
         after.insert(20, "inserted")
         del after[80]
-        deltas = imarapy.diff(before, after)
+        deltas = diff(before, after)
         self.assertTrue(len(deltas) >= 3)
 
     def test_identity_preservation_complex(self):
@@ -147,9 +151,9 @@ class TestImaraPy(unittest.TestCase):
                 return hash(self.val)
         i1_v1 = Item("A", 1)
         i1_v2 = Item("A", 2)
-        deltas = imarapy.diff([i1_v1], [i1_v2])
+        deltas = diff([i1_v1], [i1_v2])
         self.assertEqual(len(deltas), 0)
-        deltas = imarapy.diff([i1_v1, Item("B", 1)], [i1_v2, Item("C", 1)])
+        deltas = diff([i1_v1, Item("B", 1)], [i1_v2, Item("C", 1)])
         self.assertEqual(len(deltas), 1)
         self.assertEqual(deltas[0].source.position, 1)
         self.assertEqual(deltas[0].target.position, 1)
@@ -157,7 +161,7 @@ class TestImaraPy(unittest.TestCase):
     def test_only_deletions(self):
         before = ["A", "B", "C"]
         after = []
-        deltas = imarapy.diff(before, after)
+        deltas = diff(before, after)
         self.assertEqual(len(deltas), 1)
         self.assertEqual(deltas[0].source.position, 0)
         self.assertEqual(deltas[0].target.position, 0)
@@ -165,7 +169,7 @@ class TestImaraPy(unittest.TestCase):
     def test_only_insertions(self):
         before = []
         after = ["X", "Y", "Z"]
-        deltas = imarapy.diff(before, after)
+        deltas = diff(before, after)
         self.assertEqual(len(deltas), 1)
         self.assertEqual(deltas[0].source.position, 0)
         self.assertEqual(deltas[0].target.position, 0)
@@ -173,8 +177,54 @@ class TestImaraPy(unittest.TestCase):
     def test_identical_objects_different_identity(self):
         before = ["string"]
         after = ["".join(["str", "ing"])]
-        deltas = imarapy.diff(before, after)
+        deltas = diff(before, after)
         self.assertEqual(len(deltas), 0)
+
+
+class TestAlgorithms(unittest.TestCase):
+    """确保 histogram、myers、dmp 三种算法结果语义一致。"""
+
+    CASES = [
+        (["A", "B", "C"], ["A", "X", "C"]),
+        (["A", "B"], ["A", "B", "C"]),
+        (["A", "B", "C"], ["A", "B"]),
+        ([], ["X", "Y"]),
+        (["X", "Y"], []),
+        (["A"], ["A"]),
+    ]
+
+    @staticmethod
+    def apply_diff(before, deltas):
+        """将 diff 结果应用到 before，还原出 after。"""
+        result = []
+        src_pos = 0
+        for d in sorted(deltas, key=lambda d: d.source.position):
+            result.extend(before[src_pos:d.source.position])
+            result.extend(d.target.lines)
+            src_pos = d.source.position + len(d.source.lines)
+        result.extend(before[src_pos:])
+        return result
+
+    def _check(self, algo):
+        for before, after in self.CASES:
+            with self.subTest(algo=algo, before=before, after=after):
+                deltas = imarapy.diff(before, after, algorithm=algo)
+                reconstructed = self.apply_diff(before, deltas)
+                self.assertEqual(reconstructed, after)
+
+    def test_histogram(self):
+        self._check("histogram")
+
+    def test_myers(self):
+        self._check("myers")
+
+    def test_dmp(self):
+        self._check("dmp")
+
+    def test_unknown_algorithm_raises(self):
+        with self.assertRaises(ValueError):
+            imarapy.diff(["A"], ["B"], algorithm="unknown")
+
 
 if __name__ == "__main__":
     unittest.main()

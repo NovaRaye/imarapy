@@ -1,2 +1,5 @@
 /target
 .venv/
+.claude/
+
+__pycache__
